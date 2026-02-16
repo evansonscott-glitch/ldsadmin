@@ -1,0 +1,22 @@
+# Credentials - NEVER commit these
+credentials/
+*.json
+!package.json
+
+# User-specific files created during onboarding
+USER.md
+TOOLS.md
+
+# Memory and logs
+memory/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo

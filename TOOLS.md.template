@@ -1,0 +1,16 @@
+# TOOLS.md — System Access
+
+*This file is created during onboarding.*
+
+## LDS Account
+- Credentials: `credentials/lds.json`
+- Access Level: [Member / Leader with LCR]
+
+## Google
+- Service Account: `credentials/google-service-account.json`
+- Gmail IMAP: `credentials/gmail-imap.json`
+- Calendar: [Connected / Not set up]
+- Drive Folders: [List shared folders]
+
+## Notes
+- 
