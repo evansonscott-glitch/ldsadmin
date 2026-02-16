@@ -1,0 +1,41 @@
+#!/bin/bash
+# Pre-commit hook: Block plaintext credentials in JSON files
+# Ship this with the repo - users run: git config core.hooksPath .githooks
+
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# Patterns that suggest credentials
+PATTERNS="password|api_key|apikey|api-key|token|secret|app_password|cvv"
+
+# Check staged JSON files (excluding .example files and node_modules)
+STAGED_JSON=$(git diff --cached --name-only --diff-filter=ACM | grep '\.json$' | grep -v '\.example' | grep -v 'node_modules' | grep -v 'package.json' | grep -v 'package-lock.json')
+
+if [ -n "$STAGED_JSON" ]; then
+    for file in $STAGED_JSON; do
+        if [ -f "$file" ]; then
+            # Check for credential patterns (case-insensitive)
+            if grep -iE "\"($PATTERNS)\"\\s*:" "$file" > /dev/null 2>&1; then
+                echo -e "${RED}❌ BLOCKED: Potential credentials found in $file${NC}"
+                echo ""
+                echo "Matched patterns:"
+                grep -inE "\"($PATTERNS)\"\\s*:" "$file"
+                echo ""
+                echo "Use .env instead of JSON for credentials."
+                echo "If this is a false positive, use: git commit --no-verify"
+                exit 1
+            fi
+        fi
+    done
+fi
+
+# Also check for .env files being committed (should never happen)
+STAGED_ENV=$(git diff --cached --name-only --diff-filter=ACM | grep '^\.env$\|/\.env$')
+
+if [ -n "$STAGED_ENV" ]; then
+    echo -e "${RED}❌ BLOCKED: Attempting to commit .env file${NC}"
+    echo "Never commit .env files. Add to .gitignore."
+    exit 1
+fi
+
+exit 0

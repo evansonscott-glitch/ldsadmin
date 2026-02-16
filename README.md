@@ -74,6 +74,12 @@ Open a chat with Sam. He'll walk you through:
 - Run `chmod 600 .env` to restrict file permissions
 - Sam only accesses what you explicitly grant
 
+**Enable the credential safety hook:**
+```bash
+git config core.hooksPath .githooks
+```
+This blocks commits containing plaintext passwords in JSON files.
+
 ## Contributing
 
 PRs welcome! Ideas for improvements:
