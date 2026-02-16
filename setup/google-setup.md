@@ -71,13 +71,7 @@ Service accounts can't access personal Gmail directly, so we use IMAP with an Ap
 5. Click **Generate**
 6. Copy the 16-character password
 
-Save this in a file for Sam:
-```json
-{
-  "email": "your.email@gmail.com",
-  "app_password": "xxxx xxxx xxxx xxxx"
-}
-```
+You'll add this to your `.env` file in Step 8.
 
 ---
 
@@ -91,13 +85,37 @@ If you have ward/stake documents in Google Drive:
 
 ---
 
-## Step 8: Give Sam the Credentials
+## Step 8: Configure Your Environment
 
-Provide Sam with:
-1. The service account JSON file (from Step 4)
-2. The Gmail credentials file (from Step 6)
+1. Copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
 
-Sam will store these securely in `credentials/` and test the connections.
+2. Edit `.env` with your credentials:
+   ```bash
+   # Gmail IMAP Access
+   GMAIL_EMAIL=your.email@gmail.com
+   GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
+   
+   # Google Service Account
+   GOOGLE_SERVICE_ACCOUNT_PATH=./credentials/google-service-account.json
+   ```
+
+3. Move your service account JSON (from Step 4) to `credentials/`:
+   ```bash
+   mv ~/Downloads/your-project-xxxxx.json ./credentials/google-service-account.json
+   ```
+
+4. Lock down permissions:
+   ```bash
+   chmod 600 .env
+   chmod 600 credentials/*
+   ```
+
+**⚠️ Never commit `.env` or `credentials/` to git** — they're already in `.gitignore`.
+
+Sam will read from these and test the connections.
 
 ---
 

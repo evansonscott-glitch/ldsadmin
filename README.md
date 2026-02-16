@@ -23,7 +23,15 @@ git clone https://github.com/YOUR_USERNAME/sam-lds-assistant.git
 cd sam-lds-assistant
 ```
 
-### 3. Point OpenClaw to Sam
+### 3. Set Up Credentials
+
+```bash
+cp .env.example .env
+# Edit .env with your credentials (see setup/google-setup.md)
+chmod 600 .env
+```
+
+### 4. Point OpenClaw to Sam
 
 Add Sam as an agent in your `openclaw.json`:
 
@@ -37,7 +45,7 @@ Add Sam as an agent in your `openclaw.json`:
 }
 ```
 
-### 4. Start Talking
+### 5. Start Talking
 
 Open a chat with Sam. He'll walk you through:
 - Setting up your LDS account access
@@ -59,10 +67,11 @@ Open a chat with Sam. He'll walk you through:
         └── SKILL.md      # Meeting effectiveness skill
 ```
 
-## Privacy
+## Privacy & Security
 
-- Your credentials are stored locally, never in this repo
-- `.gitignore` excludes all sensitive files
+- Credentials stored in `.env` (local only, never committed)
+- `.gitignore` excludes `.env`, `credentials/`, and all sensitive files
+- Run `chmod 600 .env` to restrict file permissions
 - Sam only accesses what you explicitly grant
 
 ## Contributing
