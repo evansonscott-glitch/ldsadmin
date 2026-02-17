@@ -13,7 +13,7 @@ Usage:
 
 import argparse
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 
@@ -75,7 +75,7 @@ def cmd_list(args):
     service = get_calendar_service()
     calendar_id = get_calendar_id()
     
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     time_min = now.isoformat() + 'Z'
     time_max = (now + timedelta(days=args.days)).isoformat() + 'Z'
     
@@ -98,7 +98,7 @@ def cmd_today(args):
     service = get_calendar_service()
     calendar_id = get_calendar_id()
     
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     end_of_day = start_of_day + timedelta(days=1)
     
