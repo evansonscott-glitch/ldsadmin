@@ -43,8 +43,9 @@ SESSION_DIR = Path(__file__).parent.parent / ".sessions"
 SESSION_FILE = SESSION_DIR / "lcr_session.json"
 
 # Timeouts (ms)
-DEFAULT_TIMEOUT = 30000
-NAV_TIMEOUT = 60000
+DEFAULT_TIMEOUT = 45000
+NAV_TIMEOUT = 90000
+PAGE_LOAD_WAIT = 5  # seconds to wait after navigation
 
 
 class LCRClient:
@@ -112,12 +113,19 @@ class LCRClient:
         """Check if we're logged into LCR."""
         try:
             self.page.goto(LCR_BASE, timeout=NAV_TIMEOUT)
-            # Wait a moment for redirects
-            self.page.wait_for_load_state("networkidle", timeout=10000)
+            self.page.wait_for_load_state("networkidle", timeout=15000)
             
-            # If we're still on LCR (not redirected to login), we're logged in
-            current_url = self.page.url
-            return "lcr.churchofjesuschrist.org" in current_url and "id.churchofjesuschrist.org" not in current_url
+            # Check page title - LCR dashboard has specific title
+            title = self.page.title()
+            if "Leader and Clerk Resources" in title:
+                return True
+            
+            # Also check for user-specific content on page
+            content = self.page.content()
+            if "Actions and Messages" in content or "Member List" in content:
+                return True
+                
+            return False
         except Exception:
             return False
             
@@ -216,14 +224,27 @@ class LCRClient:
                 except Exception:
                     continue
                     
-            # Wait for redirect to LCR
-            self.page.wait_for_url("**/lcr.churchofjesuschrist.org/**", timeout=NAV_TIMEOUT)
-            self.page.wait_for_load_state("networkidle")
+            # Wait for LCR to load - check page content instead of URL
+            # (OAuth redirects can be tricky with URL checks)
+            import time
+            time.sleep(3)  # Give OAuth redirect time to complete
+            self.page.wait_for_load_state("networkidle", timeout=NAV_TIMEOUT)
             
-            if self.debug:
-                print("Login successful", file=sys.stderr)
+            # Verify we're actually in LCR by checking page title/content
+            title = self.page.title()
+            if "Leader and Clerk Resources" in title:
+                if self.debug:
+                    print("Login successful", file=sys.stderr)
+                return True
+            
+            # Check content as backup
+            content = self.page.content()
+            if "Actions and Messages" in content:
+                if self.debug:
+                    print("Login successful", file=sys.stderr)
+                return True
                 
-            return True
+            raise Exception(f"Login may have failed - unexpected page: {title}")
             
         except Exception as e:
             if self.debug:
@@ -240,20 +261,34 @@ class LCRClient:
             
     def get_members(self):
         """Get member list."""
+        import time
         self.ensure_logged_in()
         
         self.page.goto(f"{LCR_BASE}/records/member-list", timeout=NAV_TIMEOUT)
-        self.page.wait_for_load_state("networkidle")
+        self.page.wait_for_load_state("networkidle", timeout=NAV_TIMEOUT)
+        time.sleep(PAGE_LOAD_WAIT)  # Extra wait for dynamic content
         
-        # Wait for the member table to load
-        try:
-            self.page.wait_for_selector('table tbody tr', timeout=DEFAULT_TIMEOUT)
-        except PlaywrightTimeout:
-            # Try alternate selectors
+        # Wait for the member table to load - try multiple selectors
+        table_loaded = False
+        selectors_to_try = [
+            'table tbody tr',
+            '[data-testid="member-list"]',
+            '.member-row',
+            '[class*="member"]'
+        ]
+        
+        for selector in selectors_to_try:
             try:
-                self.page.wait_for_selector('[data-testid="member-list"]', timeout=5000)
+                self.page.wait_for_selector(selector, timeout=10000)
+                table_loaded = True
+                if self.debug:
+                    print(f"Found members with selector: {selector}", file=sys.stderr)
+                break
             except PlaywrightTimeout:
-                pass
+                continue
+                
+        if not table_loaded and self.debug:
+            print("Warning: Could not find member table selector", file=sys.stderr)
                 
         # Extract member data
         members = self.page.evaluate('''() => {
