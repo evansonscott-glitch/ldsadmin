@@ -178,6 +178,29 @@ def cmd_delete(args):
             'message': str(e)
         }))
 
+def cmd_test(args):
+    """Test Calendar API connection."""
+    try:
+        service = get_calendar_service()
+        calendar_id = get_calendar_id()
+        
+        # Try to get calendar info
+        calendar = service.calendars().get(calendarId=calendar_id).execute()
+        
+        print(json.dumps({
+            'status': 'success',
+            'calendar': calendar.get('summary', calendar_id),
+            'timezone': calendar.get('timeZone', 'Unknown'),
+            'message': 'Calendar connection working'
+        }, indent=2))
+        
+    except Exception as e:
+        print(json.dumps({
+            'status': 'error',
+            'message': str(e)
+        }))
+        sys.exit(1)
+
 def main():
     parser = argparse.ArgumentParser(description='Google Calendar integration for Sam')
     subparsers = parser.add_subparsers(dest='command', required=True)
@@ -208,6 +231,10 @@ def main():
     delete_parser = subparsers.add_parser('delete', help='Delete event')
     delete_parser.add_argument('event_id', help='Event ID')
     delete_parser.set_defaults(func=cmd_delete)
+    
+    # test
+    test_parser = subparsers.add_parser('test', help='Test connection')
+    test_parser.set_defaults(func=cmd_test)
     
     args = parser.parse_args()
     args.func(args)

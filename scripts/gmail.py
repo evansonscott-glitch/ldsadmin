@@ -9,6 +9,7 @@ Usage:
     python gmail.py read <message_id>
     python gmail.py draft --to "email" --subject "subject" --body "body"
     python gmail.py drafts
+    python gmail.py test  # Test connection
 """
 
 import argparse
@@ -24,12 +25,23 @@ import sys
 
 from common import get_gmail_config
 
+
+class GmailError(Exception):
+    """Gmail-specific error."""
+    pass
+
+
 def connect_imap():
-    """Connect to Gmail IMAP server."""
+    """Connect to Gmail IMAP server with error handling."""
     config = get_gmail_config()
-    imap = imaplib.IMAP4_SSL(config['imap_server'])
-    imap.login(config['email'], config['password'])
-    return imap
+    try:
+        imap = imaplib.IMAP4_SSL(config['imap_server'])
+        imap.login(config['email'], config['password'])
+        return imap
+    except imaplib.IMAP4.error as e:
+        raise GmailError(f"IMAP login failed: {e}. Check your email and app password.")
+    except Exception as e:
+        raise GmailError(f"Could not connect to Gmail: {e}")
 
 def decode_subject(subject):
     """Decode email subject header."""
@@ -190,25 +202,67 @@ def cmd_draft(args):
 
 def cmd_drafts(args):
     """List drafts."""
-    imap = connect_imap()
-    imap.select('[Gmail]/Drafts')
-    
-    _, message_numbers = imap.search(None, 'ALL')
-    nums = message_numbers[0].split()[-10:]  # Last 10 drafts
-    
-    drafts = []
-    for num in reversed(nums):
-        _, msg_data = imap.fetch(num, '(RFC822)')
-        if msg_data[0]:
-            email_body = msg_data[0][1]
-            msg = email.message_from_bytes(email_body)
-            parsed = parse_email(msg)
-            parsed['uid'] = num.decode()
-            drafts.append(parsed)
-    
-    imap.logout()
-    
-    print(json.dumps(drafts, indent=2))
+    try:
+        imap = connect_imap()
+        imap.select('[Gmail]/Drafts')
+        
+        _, message_numbers = imap.search(None, 'ALL')
+        nums = message_numbers[0].split()[-10:]  # Last 10 drafts
+        
+        drafts = []
+        for num in reversed(nums):
+            _, msg_data = imap.fetch(num, '(RFC822)')
+            if msg_data[0]:
+                email_body = msg_data[0][1]
+                msg = email.message_from_bytes(email_body)
+                parsed = parse_email(msg)
+                parsed['uid'] = num.decode()
+                drafts.append(parsed)
+        
+        imap.logout()
+        
+        print(json.dumps(drafts, indent=2))
+    except GmailError as e:
+        print(json.dumps({'error': str(e)}))
+        sys.exit(1)
+    except Exception as e:
+        print(json.dumps({'error': f'Unexpected error: {e}'}))
+        sys.exit(1)
+
+def cmd_test(args):
+    """Test Gmail connection."""
+    try:
+        config = get_gmail_config()
+        print(f"Testing connection for {config['email']}...", file=sys.stderr)
+        
+        imap = connect_imap()
+        status, folders = imap.list()
+        
+        if status == 'OK':
+            imap.select('INBOX')
+            _, messages = imap.search(None, 'ALL')
+            count = len(messages[0].split()) if messages[0] else 0
+            imap.logout()
+            
+            print(json.dumps({
+                'status': 'success',
+                'email': config['email'],
+                'inbox_count': count,
+                'message': 'Gmail connection working'
+            }, indent=2))
+        else:
+            print(json.dumps({
+                'status': 'error',
+                'message': 'Could not list folders'
+            }))
+            sys.exit(1)
+            
+    except GmailError as e:
+        print(json.dumps({'status': 'error', 'message': str(e)}))
+        sys.exit(1)
+    except Exception as e:
+        print(json.dumps({'status': 'error', 'message': f'Unexpected error: {e}'}))
+        sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser(description='Gmail integration for Sam')
@@ -240,6 +294,10 @@ def main():
     # drafts
     drafts_parser = subparsers.add_parser('drafts', help='List drafts')
     drafts_parser.set_defaults(func=cmd_drafts)
+    
+    # test
+    test_parser = subparsers.add_parser('test', help='Test connection')
+    test_parser.set_defaults(func=cmd_test)
     
     args = parser.parse_args()
     args.func(args)

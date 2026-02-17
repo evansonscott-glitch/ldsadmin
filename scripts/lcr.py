@@ -4,22 +4,29 @@ LCR (Leader and Clerk Resources) integration for Sam.
 Browser automation for Church tools.
 
 Usage:
-    python lcr.py members [--unit UNIT_NUMBER]
-    python lcr.py callings [--org ORG_NAME]
-    python lcr.py ministering
-    python lcr.py action-items
+    python lcr.py login              # Test login, save session
+    python lcr.py members            # Get member list
+    python lcr.py callings           # Get callings/organizations  
+    python lcr.py ministering        # Get ministering assignments
+    python lcr.py action-items       # Get dashboard action items
+    python lcr.py discover-calling   # Find user's calling
     
-Note: Requires playwright. Install with: pip install playwright && playwright install chromium
+Requirements: 
+    pip install playwright
+    playwright install chromium
+
+Note: LCR's UI changes periodically. If scripts break, selectors may need updating.
+      Run with --debug flag to see browser and diagnose issues.
 """
 
 import argparse
 import json
+import os
 import sys
-import time
 from pathlib import Path
 
 try:
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 except ImportError:
     print("Error: playwright required", file=sys.stderr)
     print("Run: pip install playwright && playwright install chromium", file=sys.stderr)
@@ -27,232 +34,506 @@ except ImportError:
 
 from common import get_lds_credentials
 
-LCR_URL = "https://lcr.churchofjesuschrist.org"
+# URLs
+LCR_BASE = "https://lcr.churchofjesuschrist.org"
 LOGIN_URL = "https://id.churchofjesuschrist.org"
 
-def create_browser(headless=True):
-    """Create browser instance."""
-    playwright = sync_playwright().start()
-    browser = playwright.chromium.launch(headless=headless)
-    context = browser.new_context()
-    page = context.new_page()
-    return playwright, browser, page
+# Session storage path
+SESSION_DIR = Path(__file__).parent.parent / ".sessions"
+SESSION_FILE = SESSION_DIR / "lcr_session.json"
 
-def login(page):
-    """Login to Church account."""
-    creds = get_lds_credentials()
-    
-    page.goto(LOGIN_URL)
-    time.sleep(2)
-    
-    # Enter username
-    page.fill('input[name="username"]', creds['username'])
-    page.click('button[type="submit"]')
-    time.sleep(2)
-    
-    # Enter password
-    page.fill('input[name="password"]', creds['password'])
-    page.click('button[type="submit"]')
-    time.sleep(3)
-    
-    # Wait for redirect to LCR or home
-    page.wait_for_load_state('networkidle')
-    
-    return True
+# Timeouts (ms)
+DEFAULT_TIMEOUT = 30000
+NAV_TIMEOUT = 60000
 
-def cmd_members(args):
-    """Get member list."""
-    playwright, browser, page = create_browser()
-    
-    try:
-        login(page)
-        page.goto(f"{LCR_URL}/records/member-list")
-        time.sleep(3)
-        
-        # Wait for member table to load
-        page.wait_for_selector('table', timeout=10000)
-        
-        # Extract member data
-        members = page.evaluate('''() => {
-            const rows = document.querySelectorAll('table tbody tr');
-            return Array.from(rows).map(row => {
-                const cells = row.querySelectorAll('td');
-                return {
-                    name: cells[0]?.innerText || '',
-                    age: cells[1]?.innerText || '',
-                    phone: cells[2]?.innerText || '',
-                    email: cells[3]?.innerText || ''
-                };
-            }).filter(m => m.name);
-        }''')
-        
-        print(json.dumps(members, indent=2))
-        
-    except Exception as e:
-        print(json.dumps({'error': str(e)}), file=sys.stderr)
-    finally:
-        browser.close()
-        playwright.stop()
 
-def cmd_callings(args):
-    """Get callings/organizations."""
-    playwright, browser, page = create_browser()
+class LCRClient:
+    """LCR browser automation client with session persistence."""
     
-    try:
-        login(page)
-        page.goto(f"{LCR_URL}/orgs/callings-and-டகளிங்ஸ்")
-        time.sleep(3)
+    def __init__(self, headless=True, debug=False):
+        self.headless = headless
+        self.debug = debug
+        self.playwright = None
+        self.browser = None
+        self.context = None
+        self.page = None
         
-        # Get organization structure
-        orgs = page.evaluate('''() => {
-            const orgElements = document.querySelectorAll('.organization-card, .org-item');
-            return Array.from(orgElements).map(org => {
-                const name = org.querySelector('.org-name, h3, h4')?.innerText || '';
-                const members = Array.from(org.querySelectorAll('.member-item, .calling-item')).map(m => ({
-                    calling: m.querySelector('.calling-name')?.innerText || '',
-                    name: m.querySelector('.member-name')?.innerText || ''
-                }));
-                return { organization: name, callings: members };
-            });
-        }''')
+    def __enter__(self):
+        self.start()
+        return self
         
-        print(json.dumps(orgs, indent=2))
+    def __exit__(self, *args):
+        self.stop()
         
-    except Exception as e:
-        print(json.dumps({'error': str(e)}), file=sys.stderr)
-    finally:
-        browser.close()
-        playwright.stop()
-
-def cmd_ministering(args):
-    """Get ministering assignments."""
-    playwright, browser, page = create_browser()
-    
-    try:
-        login(page)
-        page.goto(f"{LCR_URL}/ministering")
-        time.sleep(3)
+    def start(self):
+        """Start browser with optional saved session."""
+        self.playwright = sync_playwright().start()
+        self.browser = self.playwright.chromium.launch(
+            headless=self.headless,
+            slow_mo=100 if self.debug else 0
+        )
         
-        # Get ministering data
-        data = page.evaluate('''() => {
-            const assignments = [];
-            const sections = document.querySelectorAll('.district-section, .companionship');
+        # Try to load saved session
+        if SESSION_FILE.exists():
+            try:
+                self.context = self.browser.new_context(
+                    storage_state=str(SESSION_FILE)
+                )
+                if self.debug:
+                    print("Loaded saved session", file=sys.stderr)
+            except Exception as e:
+                if self.debug:
+                    print(f"Could not load session: {e}", file=sys.stderr)
+                self.context = self.browser.new_context()
+        else:
+            self.context = self.browser.new_context()
             
-            sections.forEach(section => {
-                const ministers = section.querySelectorAll('.minister-name');
-                const households = section.querySelectorAll('.household-name');
+        self.page = self.context.new_page()
+        self.page.set_default_timeout(DEFAULT_TIMEOUT)
+        
+    def stop(self):
+        """Close browser and save session."""
+        if self.context:
+            try:
+                SESSION_DIR.mkdir(parents=True, exist_ok=True)
+                self.context.storage_state(path=str(SESSION_FILE))
+                if self.debug:
+                    print("Saved session", file=sys.stderr)
+            except Exception as e:
+                if self.debug:
+                    print(f"Could not save session: {e}", file=sys.stderr)
+                    
+        if self.browser:
+            self.browser.close()
+        if self.playwright:
+            self.playwright.stop()
+            
+    def is_logged_in(self):
+        """Check if we're logged into LCR."""
+        try:
+            self.page.goto(LCR_BASE, timeout=NAV_TIMEOUT)
+            # Wait a moment for redirects
+            self.page.wait_for_load_state("networkidle", timeout=10000)
+            
+            # If we're still on LCR (not redirected to login), we're logged in
+            current_url = self.page.url
+            return "lcr.churchofjesuschrist.org" in current_url and "id.churchofjesuschrist.org" not in current_url
+        except Exception:
+            return False
+            
+    def login(self):
+        """Login to Church account."""
+        creds = get_lds_credentials()
+        
+        if self.debug:
+            print(f"Logging in as {creds['username']}...", file=sys.stderr)
+            
+        # Go to LCR which will redirect to login
+        self.page.goto(LCR_BASE, timeout=NAV_TIMEOUT)
+        self.page.wait_for_load_state("networkidle")
+        
+        # Check if already logged in
+        if "lcr.churchofjesuschrist.org" in self.page.url:
+            if self.debug:
+                print("Already logged in", file=sys.stderr)
+            return True
+            
+        try:
+            # Wait for and fill username
+            # The Church uses Okta - look for the username field
+            username_selectors = [
+                'input[name="identifier"]',
+                'input[name="username"]', 
+                'input[id="okta-signin-username"]',
+                'input[type="text"][autocomplete="username"]',
+                '#username'
+            ]
+            
+            username_field = None
+            for selector in username_selectors:
+                try:
+                    username_field = self.page.wait_for_selector(selector, timeout=5000)
+                    if username_field:
+                        break
+                except PlaywrightTimeout:
+                    continue
+                    
+            if not username_field:
+                raise Exception("Could not find username field")
                 
-                assignments.push({
-                    ministers: Array.from(ministers).map(m => m.innerText),
-                    households: Array.from(households).map(h => h.innerText)
-                });
+            username_field.fill(creds['username'])
+            
+            # Click next/submit
+            submit_selectors = [
+                'input[type="submit"]',
+                'button[type="submit"]',
+                'button:has-text("Next")',
+                'button:has-text("Sign In")',
+                '.button--primary'
+            ]
+            
+            for selector in submit_selectors:
+                try:
+                    btn = self.page.query_selector(selector)
+                    if btn and btn.is_visible():
+                        btn.click()
+                        break
+                except Exception:
+                    continue
+                    
+            self.page.wait_for_load_state("networkidle")
+            
+            # Wait for and fill password
+            password_selectors = [
+                'input[name="credentials.passcode"]',
+                'input[name="password"]',
+                'input[id="okta-signin-password"]',
+                'input[type="password"]',
+                '#password'
+            ]
+            
+            password_field = None
+            for selector in password_selectors:
+                try:
+                    password_field = self.page.wait_for_selector(selector, timeout=5000)
+                    if password_field:
+                        break
+                except PlaywrightTimeout:
+                    continue
+                    
+            if not password_field:
+                raise Exception("Could not find password field")
+                
+            password_field.fill(creds['password'])
+            
+            # Submit password
+            for selector in submit_selectors:
+                try:
+                    btn = self.page.query_selector(selector)
+                    if btn and btn.is_visible():
+                        btn.click()
+                        break
+                except Exception:
+                    continue
+                    
+            # Wait for redirect to LCR
+            self.page.wait_for_url("**/lcr.churchofjesuschrist.org/**", timeout=NAV_TIMEOUT)
+            self.page.wait_for_load_state("networkidle")
+            
+            if self.debug:
+                print("Login successful", file=sys.stderr)
+                
+            return True
+            
+        except Exception as e:
+            if self.debug:
+                print(f"Login failed: {e}", file=sys.stderr)
+                # Save screenshot for debugging
+                self.page.screenshot(path="/tmp/lcr_login_failed.png")
+                print("Screenshot saved to /tmp/lcr_login_failed.png", file=sys.stderr)
+            raise
+            
+    def ensure_logged_in(self):
+        """Ensure we're logged in, login if needed."""
+        if not self.is_logged_in():
+            self.login()
+            
+    def get_members(self):
+        """Get member list."""
+        self.ensure_logged_in()
+        
+        self.page.goto(f"{LCR_BASE}/records/member-list", timeout=NAV_TIMEOUT)
+        self.page.wait_for_load_state("networkidle")
+        
+        # Wait for the member table to load
+        try:
+            self.page.wait_for_selector('table tbody tr', timeout=DEFAULT_TIMEOUT)
+        except PlaywrightTimeout:
+            # Try alternate selectors
+            try:
+                self.page.wait_for_selector('[data-testid="member-list"]', timeout=5000)
+            except PlaywrightTimeout:
+                pass
+                
+        # Extract member data
+        members = self.page.evaluate('''() => {
+            const results = [];
+            
+            // Try multiple possible table structures
+            const rows = document.querySelectorAll('table tbody tr, .member-row, [data-testid="member-row"]');
+            
+            rows.forEach(row => {
+                const cells = row.querySelectorAll('td, .cell');
+                const nameEl = row.querySelector('.member-name, td:first-child a, td:first-child');
+                const phoneEl = row.querySelector('.phone, [data-field="phone"], td:nth-child(3)');
+                const emailEl = row.querySelector('.email, [data-field="email"], td:nth-child(4)');
+                
+                const name = nameEl?.innerText?.trim() || '';
+                if (name && name.length > 1) {
+                    results.push({
+                        name: name,
+                        phone: phoneEl?.innerText?.trim() || '',
+                        email: emailEl?.innerText?.trim() || ''
+                    });
+                }
             });
+            
+            return results;
+        }''')
+        
+        return members
+        
+    def get_callings(self):
+        """Get callings and organizations."""
+        self.ensure_logged_in()
+        
+        self.page.goto(f"{LCR_BASE}/orgs/members-with-callings", timeout=NAV_TIMEOUT)
+        self.page.wait_for_load_state("networkidle")
+        
+        # Wait for content
+        try:
+            self.page.wait_for_selector('.org-name, .organization, table', timeout=DEFAULT_TIMEOUT)
+        except PlaywrightTimeout:
+            pass
+            
+        orgs = self.page.evaluate('''() => {
+            const results = [];
+            
+            // Try to find organization sections
+            const sections = document.querySelectorAll('.organization-section, .org-card, [data-testid="organization"]');
+            
+            if (sections.length > 0) {
+                sections.forEach(section => {
+                    const orgName = section.querySelector('.org-name, h3, h4')?.innerText?.trim() || '';
+                    const callings = [];
+                    
+                    section.querySelectorAll('.calling-row, .member-calling, tr').forEach(row => {
+                        const calling = row.querySelector('.calling-name, td:first-child')?.innerText?.trim() || '';
+                        const name = row.querySelector('.member-name, td:nth-child(2)')?.innerText?.trim() || '';
+                        if (calling || name) {
+                            callings.push({ calling, name });
+                        }
+                    });
+                    
+                    if (orgName || callings.length > 0) {
+                        results.push({ organization: orgName, callings });
+                    }
+                });
+            } else {
+                // Fallback: try to parse any table
+                const rows = document.querySelectorAll('table tbody tr');
+                rows.forEach(row => {
+                    const cells = row.querySelectorAll('td');
+                    if (cells.length >= 2) {
+                        results.push({
+                            organization: 'Unknown',
+                            callings: [{
+                                name: cells[0]?.innerText?.trim() || '',
+                                calling: cells[1]?.innerText?.trim() || ''
+                            }]
+                        });
+                    }
+                });
+            }
+            
+            return results;
+        }''')
+        
+        return orgs
+        
+    def get_ministering(self):
+        """Get ministering assignments."""
+        self.ensure_logged_in()
+        
+        self.page.goto(f"{LCR_BASE}/ministering", timeout=NAV_TIMEOUT)
+        self.page.wait_for_load_state("networkidle")
+        
+        # Wait for content
+        try:
+            self.page.wait_for_selector('.district, .companionship, table', timeout=DEFAULT_TIMEOUT)
+        except PlaywrightTimeout:
+            pass
+            
+        data = self.page.evaluate('''() => {
+            const assignments = [];
+            
+            // Look for companionship sections
+            const companionships = document.querySelectorAll('.companionship, .assignment-group, [data-testid="companionship"]');
+            
+            if (companionships.length > 0) {
+                companionships.forEach(comp => {
+                    const ministers = Array.from(comp.querySelectorAll('.minister, .companion-name'))
+                        .map(el => el.innerText?.trim()).filter(Boolean);
+                    const households = Array.from(comp.querySelectorAll('.household, .assignment'))
+                        .map(el => el.innerText?.trim()).filter(Boolean);
+                    
+                    if (ministers.length > 0 || households.length > 0) {
+                        assignments.push({ ministers, households });
+                    }
+                });
+            }
             
             return assignments;
         }''')
         
-        print(json.dumps(data, indent=2))
+        return data
         
-    except Exception as e:
-        print(json.dumps({'error': str(e)}), file=sys.stderr)
-    finally:
-        browser.close()
-        playwright.stop()
-
-def cmd_action_items(args):
-    """Get action items/to-dos from LCR dashboard."""
-    playwright, browser, page = create_browser()
-    
-    try:
-        login(page)
-        page.goto(LCR_URL)
-        time.sleep(3)
+    def get_action_items(self):
+        """Get action items from dashboard."""
+        self.ensure_logged_in()
         
-        # Get action items from dashboard
-        items = page.evaluate('''() => {
-            const actionItems = [];
-            const cards = document.querySelectorAll('.action-item, .todo-item, .alert-card');
+        self.page.goto(LCR_BASE, timeout=NAV_TIMEOUT)
+        self.page.wait_for_load_state("networkidle")
+        
+        items = self.page.evaluate('''() => {
+            const results = [];
+            
+            // Look for action item cards/alerts
+            const cards = document.querySelectorAll('.action-card, .alert, .notification, [data-testid="action-item"]');
             
             cards.forEach(card => {
-                const title = card.querySelector('.title, h3, h4')?.innerText || '';
-                const desc = card.querySelector('.description, .body, p')?.innerText || '';
-                const count = card.querySelector('.count, .badge')?.innerText || '';
+                const title = card.querySelector('.title, h3, h4, .heading')?.innerText?.trim() || '';
+                const desc = card.querySelector('.description, .body, p')?.innerText?.trim() || '';
+                const count = card.querySelector('.count, .badge, .number')?.innerText?.trim() || '';
                 
                 if (title) {
-                    actionItems.push({ title, description: desc, count });
+                    results.push({ title, description: desc, count });
                 }
             });
             
-            return actionItems;
+            return results;
         }''')
         
-        print(json.dumps(items, indent=2))
+        return items
         
-    except Exception as e:
-        print(json.dumps({'error': str(e)}), file=sys.stderr)
-    finally:
-        browser.close()
-        playwright.stop()
-
-def cmd_discover_calling(args):
-    """Discover user's current calling from LCR."""
-    playwright, browser, page = create_browser()
-    
-    try:
-        login(page)
-        page.goto(f"{LCR_URL}")
-        time.sleep(3)
+    def discover_calling(self):
+        """Try to discover user's calling from LCR."""
+        self.ensure_logged_in()
         
-        # Try to find user's calling from the dashboard or profile
-        calling_info = page.evaluate('''() => {
-            // Look for calling info in various places
-            const callingElements = document.querySelectorAll('.my-calling, .current-calling, .user-calling');
-            const sidebarItems = document.querySelectorAll('.sidebar .calling, nav .calling');
-            const dashboardItems = document.querySelectorAll('.dashboard-card .calling');
+        self.page.goto(LCR_BASE, timeout=NAV_TIMEOUT)
+        self.page.wait_for_load_state("networkidle")
+        
+        info = self.page.evaluate('''() => {
+            // Look for calling info in header, sidebar, or dashboard
+            const callingSelectors = [
+                '.my-calling', '.current-calling', '.user-role',
+                '[data-testid="user-calling"]', '.header-calling'
+            ];
             
             let calling = '';
-            let organization = '';
-            
-            // Check each possible location
-            for (const el of [...callingElements, ...sidebarItems, ...dashboardItems]) {
-                const text = el.innerText?.trim();
-                if (text && text.length > 2) {
-                    calling = text;
+            for (const selector of callingSelectors) {
+                const el = document.querySelector(selector);
+                if (el?.innerText?.trim()) {
+                    calling = el.innerText.trim();
                     break;
                 }
             }
             
-            // Also check permissions/role indicators
-            const roleIndicators = document.querySelectorAll('[class*="role"], [class*="permission"]');
-            const roles = Array.from(roleIndicators).map(r => r.innerText).filter(r => r);
+            // Check sidebar navigation for clues about permissions
+            const navItems = Array.from(document.querySelectorAll('nav a, .sidebar a, .menu-item'))
+                .map(a => a.innerText?.trim())
+                .filter(Boolean);
             
-            return { calling, roles, raw: document.title };
+            // Get page title for context
+            const pageTitle = document.title;
+            
+            return { 
+                calling, 
+                navigation: navItems,
+                pageTitle,
+                url: window.location.href
+            };
         }''')
         
-        print(json.dumps(calling_info, indent=2))
-        
-    except Exception as e:
-        print(json.dumps({'error': str(e)}), file=sys.stderr)
-    finally:
-        browser.close()
-        playwright.stop()
+        return info
+
+
+def cmd_login(args):
+    """Test login and save session."""
+    with LCRClient(headless=not args.debug, debug=args.debug) as client:
+        try:
+            client.login()
+            print(json.dumps({
+                'status': 'success',
+                'message': 'Login successful, session saved'
+            }))
+        except Exception as e:
+            print(json.dumps({
+                'status': 'error',
+                'message': str(e)
+            }))
+            sys.exit(1)
+
+def cmd_members(args):
+    """Get member list."""
+    with LCRClient(headless=not args.debug, debug=args.debug) as client:
+        try:
+            members = client.get_members()
+            print(json.dumps(members, indent=2))
+        except Exception as e:
+            print(json.dumps({'error': str(e)}))
+            sys.exit(1)
+
+def cmd_callings(args):
+    """Get callings."""
+    with LCRClient(headless=not args.debug, debug=args.debug) as client:
+        try:
+            callings = client.get_callings()
+            print(json.dumps(callings, indent=2))
+        except Exception as e:
+            print(json.dumps({'error': str(e)}))
+            sys.exit(1)
+
+def cmd_ministering(args):
+    """Get ministering assignments."""
+    with LCRClient(headless=not args.debug, debug=args.debug) as client:
+        try:
+            data = client.get_ministering()
+            print(json.dumps(data, indent=2))
+        except Exception as e:
+            print(json.dumps({'error': str(e)}))
+            sys.exit(1)
+
+def cmd_action_items(args):
+    """Get action items."""
+    with LCRClient(headless=not args.debug, debug=args.debug) as client:
+        try:
+            items = client.get_action_items()
+            print(json.dumps(items, indent=2))
+        except Exception as e:
+            print(json.dumps({'error': str(e)}))
+            sys.exit(1)
+
+def cmd_discover_calling(args):
+    """Discover user's calling."""
+    with LCRClient(headless=not args.debug, debug=args.debug) as client:
+        try:
+            info = client.discover_calling()
+            print(json.dumps(info, indent=2))
+        except Exception as e:
+            print(json.dumps({'error': str(e)}))
+            sys.exit(1)
+
 
 def main():
     parser = argparse.ArgumentParser(description='LCR integration for Sam')
+    parser.add_argument('--debug', action='store_true', help='Show browser, verbose output')
     subparsers = parser.add_subparsers(dest='command', required=True)
+    
+    # login
+    login_parser = subparsers.add_parser('login', help='Test login')
+    login_parser.set_defaults(func=cmd_login)
     
     # members
     members_parser = subparsers.add_parser('members', help='Get member list')
-    members_parser.add_argument('--unit', help='Unit number')
     members_parser.set_defaults(func=cmd_members)
     
     # callings
     callings_parser = subparsers.add_parser('callings', help='Get callings')
-    callings_parser.add_argument('--org', help='Organization name filter')
     callings_parser.set_defaults(func=cmd_callings)
     
     # ministering
-    ministering_parser = subparsers.add_parser('ministering', help='Get ministering assignments')
+    ministering_parser = subparsers.add_parser('ministering', help='Get ministering')
     ministering_parser.set_defaults(func=cmd_ministering)
     
     # action-items
@@ -260,11 +541,12 @@ def main():
     action_parser.set_defaults(func=cmd_action_items)
     
     # discover-calling
-    discover_parser = subparsers.add_parser('discover-calling', help='Discover user calling')
+    discover_parser = subparsers.add_parser('discover-calling', help='Discover calling')
     discover_parser.set_defaults(func=cmd_discover_calling)
     
     args = parser.parse_args()
     args.func(args)
+
 
 if __name__ == '__main__':
     main()
