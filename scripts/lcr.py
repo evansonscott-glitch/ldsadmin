@@ -458,33 +458,49 @@ class LCRClient:
             self.page.wait_for_load_state("networkidle")
         
         info = self.page.evaluate('''() => {
-            // Look for calling info in header, sidebar, or dashboard
-            const callingSelectors = [
-                '.my-calling', '.current-calling', '.user-role',
-                '[data-testid="user-calling"]', '.header-calling'
-            ];
+            // Parse calling info from page content
+            const body = document.body.innerText;
+            const lines = body.split('\\n').map(l => l.trim()).filter(l => l);
             
             let calling = '';
-            for (const selector of callingSelectors) {
-                const el = document.querySelector(selector);
-                if (el?.innerText?.trim()) {
-                    calling = el.innerText.trim();
-                    break;
+            let name = '';
+            let unit = '';
+            
+            // LCR shows format like:
+            // Communication Specialist (2135280)
+            // Lehi Utah Holbrook Farms Stake (2135280)
+            // Scott Brandon Evanson
+            // Communication Specialist
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                
+                // Find name (usually has Evanson or similar family name)
+                if (line.includes('Evanson') || (line.split(' ').length >= 2 && !line.includes('('))) {
+                    if (!name && line.length < 50) name = line;
+                }
+                
+                // Find unit (Stake or Ward)
+                if ((line.includes('Stake') || line.includes('Ward')) && line.includes('(')) {
+                    unit = line.replace(/\\s*\\(\\d+\\)/, '').trim();
+                }
+                
+                // Find calling - look for common calling keywords
+                const callingKeywords = ['Specialist', 'President', 'Counselor', 'Secretary', 
+                                        'Clerk', 'Teacher', 'Leader', 'Director', 'Coordinator'];
+                for (const kw of callingKeywords) {
+                    if (line.includes(kw) && !line.includes('(') && !calling) {
+                        calling = line;
+                        break;
+                    }
                 }
             }
             
-            // Check sidebar navigation for clues about permissions
-            const navItems = Array.from(document.querySelectorAll('nav a, .sidebar a, .menu-item'))
-                .map(a => a.innerText?.trim())
-                .filter(Boolean);
-            
-            // Get page title for context
-            const pageTitle = document.title;
-            
             return { 
+                name,
                 calling, 
-                navigation: navItems,
-                pageTitle,
+                unit,
+                pageTitle: document.title,
                 url: window.location.href
             };
         }''')
