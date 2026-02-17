@@ -1,0 +1,12 @@
+# Sam Integration Scripts - Dependencies
+
+# Gmail (IMAP/SMTP - built into Python, no extra deps needed)
+
+# Google Calendar
+google-auth>=2.0.0
+google-api-python-client>=2.0.0
+
+# LCR Browser Automation
+playwright>=1.40.0
+
+# After installing, run: playwright install chromium

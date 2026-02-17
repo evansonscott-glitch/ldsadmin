@@ -31,7 +31,15 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-### 4. Point OpenClaw to Sam
+### 4. Install Script Dependencies
+
+```bash
+cd scripts
+pip install -r requirements.txt
+playwright install chromium  # For LCR browser automation
+```
+
+### 5. Point OpenClaw to Sam
 
 Add Sam as an agent in your `openclaw.json`:
 
@@ -45,12 +53,45 @@ Add Sam as an agent in your `openclaw.json`:
 }
 ```
 
-### 5. Start Talking
+### 6. Start Talking
 
 Open a chat with Sam. He'll walk you through:
 - Setting up your LDS account access
 - Connecting your Google calendar, email, and drive
 - Learning about your calling and what you need help with
+
+## Integration Scripts
+
+Sam comes with ready-to-use integration scripts:
+
+### Gmail (`scripts/gmail.py`)
+```bash
+python scripts/gmail.py inbox --limit 10      # Fetch recent emails
+python scripts/gmail.py inbox --unread        # Unread only
+python scripts/gmail.py search "ward council" # Search emails
+python scripts/gmail.py read <uid>            # Read specific email
+python scripts/gmail.py draft --to "..." --subject "..." --body "..."
+python scripts/gmail.py drafts                # List drafts
+```
+
+### Calendar (`scripts/calendar.py`)
+```bash
+python scripts/calendar.py today              # Today's events
+python scripts/calendar.py week               # This week
+python scripts/calendar.py list --days 30     # Next 30 days
+python scripts/calendar.py create --title "Ward Council" --start "2026-03-01 08:00" --end "2026-03-01 09:00"
+```
+
+### LCR (`scripts/lcr.py`)
+```bash
+python scripts/lcr.py members                 # Member list
+python scripts/lcr.py callings                # Callings/orgs
+python scripts/lcr.py ministering             # Ministering assignments
+python scripts/lcr.py action-items            # Dashboard to-dos
+python scripts/lcr.py discover-calling        # Find user's calling
+```
+
+All scripts output JSON for easy parsing by Sam.
 
 ## File Structure
 
@@ -60,6 +101,12 @@ Open a chat with Sam. He'll walk you through:
 ├── BOOTSTRAP.md      # First-run onboarding (deletes itself after)
 ├── USER.md.template  # Your info (created during onboarding)
 ├── TOOLS.md.template # Credentials config (created during onboarding)
+├── scripts/
+│   ├── common.py         # Shared utilities, .env loading
+│   ├── gmail.py          # Gmail IMAP integration
+│   ├── calendar.py       # Google Calendar integration
+│   ├── lcr.py            # LCR browser automation
+│   └── requirements.txt  # Python dependencies
 ├── setup/
 │   └── google-setup.md   # Google service account walkthrough
 └── skills/
