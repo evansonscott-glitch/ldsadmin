@@ -452,8 +452,10 @@ class LCRClient:
         """Try to discover user's calling from LCR."""
         self.ensure_logged_in()
         
-        self.page.goto(LCR_BASE, timeout=NAV_TIMEOUT)
-        self.page.wait_for_load_state("networkidle")
+        # Only navigate if not already on LCR dashboard
+        if "Leader and Clerk Resources" not in self.page.title():
+            self.page.goto(LCR_BASE, timeout=NAV_TIMEOUT)
+            self.page.wait_for_load_state("networkidle")
         
         info = self.page.evaluate('''() => {
             // Look for calling info in header, sidebar, or dashboard
