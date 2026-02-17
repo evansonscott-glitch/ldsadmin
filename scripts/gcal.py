@@ -4,11 +4,11 @@ Google Calendar integration for Sam.
 Uses service account for read/write access.
 
 Usage:
-    python calendar.py list [--days N]
-    python calendar.py today
-    python calendar.py week
-    python calendar.py create --title "title" --start "YYYY-MM-DD HH:MM" --end "YYYY-MM-DD HH:MM" [--desc "description"]
-    python calendar.py delete <event_id>
+    python gcal.py list [--days N]
+    python gcal.py today
+    python gcal.py week
+    python gcal.py create --title "title" --start "YYYY-MM-DD HH:MM" --end "YYYY-MM-DD HH:MM" [--desc "description"]
+    python gcal.py delete <event_id>
 """
 
 import argparse

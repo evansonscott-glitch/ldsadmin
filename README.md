@@ -74,12 +74,12 @@ python scripts/gmail.py draft --to "..." --subject "..." --body "..."
 python scripts/gmail.py drafts                # List drafts
 ```
 
-### Calendar (`scripts/calendar.py`)
+### Calendar (`scripts/gcal.py`)
 ```bash
-python scripts/calendar.py today              # Today's events
-python scripts/calendar.py week               # This week
-python scripts/calendar.py list --days 30     # Next 30 days
-python scripts/calendar.py create --title "Ward Council" --start "2026-03-01 08:00" --end "2026-03-01 09:00"
+python scripts/gcal.py today              # Today's events
+python scripts/gcal.py week               # This week
+python scripts/gcal.py list --days 30     # Next 30 days
+python scripts/gcal.py create --title "Ward Council" --start "2026-03-01 08:00" --end "2026-03-01 09:00"
 ```
 
 ### LCR (`scripts/lcr.py`)
@@ -104,7 +104,7 @@ All scripts output JSON for easy parsing by Sam.
 ├── scripts/
 │   ├── common.py         # Shared utilities, .env loading
 │   ├── gmail.py          # Gmail IMAP integration
-│   ├── calendar.py       # Google Calendar integration
+│   ├── gcal.py       # Google Calendar integration
 │   ├── lcr.py            # LCR browser automation
 │   └── requirements.txt  # Python dependencies
 ├── setup/
@@ -113,6 +113,24 @@ All scripts output JSON for easy parsing by Sam.
     └── meetings/
         └── SKILL.md      # Meeting effectiveness skill
 ```
+
+## Troubleshooting
+
+### LCR Issues
+- **Timeout errors**: Church login can be slow. Try again or check your internet.
+- **"Display not set"**: The `--debug` flag opens a visible browser window. On servers without a display, omit `--debug` to run headless.
+- **Login loop**: Delete `.sessions/lcr_session.json` and try again.
+- **Selectors changed**: LCR's UI updates periodically. Open an issue if scripts break.
+
+### Google API Issues
+- **"Service account not found"**: Make sure `credentials/google-service-account.json` exists.
+- **"Insufficient permission"**: Enable the Gmail/Calendar API in Google Cloud Console.
+- **Calendar not showing**: Share your calendar with the service account email (found in the JSON).
+
+### General
+- Check `.env` has all required values (compare with `.env.example`)
+- Run scripts directly with `python scripts/xyz.py` to see raw errors
+- Update dependencies: `pip install -r scripts/requirements.txt --upgrade`
 
 ## Privacy & Security
 
