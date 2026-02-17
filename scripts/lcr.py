@@ -140,10 +140,12 @@ class LCRClient:
         self.page.goto(LCR_BASE, timeout=NAV_TIMEOUT)
         self.page.wait_for_load_state("networkidle")
         
-        # Check if already logged in
-        if "lcr.churchofjesuschrist.org" in self.page.url:
+        # Check if already logged in - must check page content, not URL
+        # (URL may contain lcr.churchofjesuschrist.org in redirect_uri param)
+        title = self.page.title()
+        if "Leader and Clerk Resources" in title:
             if self.debug:
-                print("Already logged in", file=sys.stderr)
+                print("Already logged in (detected from page title)", file=sys.stderr)
             return True
             
         try:
@@ -256,8 +258,13 @@ class LCRClient:
             
     def ensure_logged_in(self):
         """Ensure we're logged in, login if needed."""
-        if not self.is_logged_in():
-            self.login()
+        # Check current page first before navigating
+        title = self.page.title()
+        if "Leader and Clerk Resources" in title:
+            return  # Already on LCR
+            
+        # Otherwise do full login
+        self.login()
             
     def get_members(self):
         """Get member list."""
