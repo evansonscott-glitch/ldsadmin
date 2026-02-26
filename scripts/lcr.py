@@ -17,7 +17,13 @@ Requirements:
 
 Note: LCR's UI changes periodically. If scripts break, selectors may need updating.
       Run with --debug flag to see browser and diagnose issues.
+
+Last tested: 2026-02-26 (LCR version unknown - Church doesn't publish versions)
+Selectors verified against: lcr.churchofjesuschrist.org as of Feb 2026
 """
+
+import time
+import functools
 
 import argparse
 import json
@@ -32,7 +38,27 @@ except ImportError:
     print("Run: pip install playwright && playwright install chromium", file=sys.stderr)
     sys.exit(1)
 
-from common import get_lds_credentials
+from common import get_lds_credentials, get_env
+
+# Retry decorator for flaky Church servers
+def retry_on_failure(max_retries=3, delay=2, backoff=2):
+    """Retry decorator with exponential backoff for LCR operations."""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            current_delay = delay
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        time.sleep(current_delay)
+                        current_delay *= backoff
+            raise last_exception
+        return wrapper
+    return decorator
 
 # URLs
 LCR_BASE = "https://lcr.churchofjesuschrist.org"
@@ -51,9 +77,10 @@ PAGE_LOAD_WAIT = 5  # seconds to wait after navigation
 class LCRClient:
     """LCR browser automation client with session persistence."""
     
-    def __init__(self, headless=True, debug=False):
+    def __init__(self, headless=True, debug=False, timeout=45):
         self.headless = headless
         self.debug = debug
+        self.timeout = timeout * 1000  # Convert to ms
         self.playwright = None
         self.browser = None
         self.context = None
@@ -90,7 +117,7 @@ class LCRClient:
             self.context = self.browser.new_context()
             
         self.page = self.context.new_page()
-        self.page.set_default_timeout(DEFAULT_TIMEOUT)
+        self.page.set_default_timeout(self.timeout)
         
     def stop(self):
         """Close browser and save session."""
@@ -266,9 +293,9 @@ class LCRClient:
         # Otherwise do full login
         self.login()
             
+    @retry_on_failure(max_retries=3, delay=2, backoff=2)
     def get_members(self):
         """Get member list."""
-        import time
         self.ensure_logged_in()
         
         self.page.goto(f"{LCR_BASE}/records/member-list", timeout=NAV_TIMEOUT)
@@ -325,6 +352,7 @@ class LCRClient:
         
         return members
         
+    @retry_on_failure(max_retries=3, delay=2, backoff=2)
     def get_callings(self):
         """Get callings and organizations."""
         self.ensure_logged_in()
@@ -383,6 +411,7 @@ class LCRClient:
         
         return orgs
         
+    @retry_on_failure(max_retries=3, delay=2, backoff=2)
     def get_ministering(self):
         """Get ministering assignments."""
         self.ensure_logged_in()
@@ -420,6 +449,7 @@ class LCRClient:
         
         return data
         
+    @retry_on_failure(max_retries=3, delay=2, backoff=2)
     def get_action_items(self):
         """Get action items from dashboard."""
         self.ensure_logged_in()
@@ -459,6 +489,7 @@ class LCRClient:
         
         info = self.page.evaluate('''() => {
             // Parse calling info from page content
+            // Note: LCR UI changes periodically - selectors last verified Feb 2026
             const body = document.body.innerText;
             const lines = body.split('\\n').map(l => l.trim()).filter(l => l);
             
@@ -466,33 +497,52 @@ class LCRClient:
             let name = '';
             let unit = '';
             
-            // LCR shows format like:
+            // LCR header typically shows format like:
             // Communication Specialist (2135280)
             // Lehi Utah Holbrook Farms Stake (2135280)
-            // Scott Brandon Evanson
+            // [User's Full Name]
             // Communication Specialist
+            
+            // Calling keywords to identify calling lines
+            const callingKeywords = ['Specialist', 'President', 'Counselor', 'Secretary', 
+                                    'Clerk', 'Teacher', 'Leader', 'Director', 'Coordinator',
+                                    'Missionary', 'Advisor', 'Assistant'];
             
             for (let i = 0; i < lines.length; i++) {
                 const line = lines[i];
                 
-                // Find name (usually has Evanson or similar family name)
-                if (line.includes('Evanson') || (line.split(' ').length >= 2 && !line.includes('('))) {
-                    if (!name && line.length < 50) name = line;
-                }
-                
-                // Find unit (Stake or Ward)
+                // Find unit (Stake or Ward with unit number)
                 if ((line.includes('Stake') || line.includes('Ward')) && line.includes('(')) {
                     unit = line.replace(/\\s*\\(\\d+\\)/, '').trim();
+                    continue;
                 }
                 
                 // Find calling - look for common calling keywords
-                const callingKeywords = ['Specialist', 'President', 'Counselor', 'Secretary', 
-                                        'Clerk', 'Teacher', 'Leader', 'Director', 'Coordinator'];
-                for (const kw of callingKeywords) {
-                    if (line.includes(kw) && !line.includes('(') && !calling) {
-                        calling = line;
-                        break;
-                    }
+                const isCallingLine = callingKeywords.some(kw => line.includes(kw));
+                if (isCallingLine && !line.includes('(') && !calling) {
+                    calling = line;
+                    continue;
+                }
+                
+                // Find name - looks like "Firstname Middlename Lastname" pattern
+                // Heuristic: 2-4 words, no numbers, no parens, no calling keywords, 
+                // each word capitalized, reasonable length
+                const words = line.split(' ');
+                const looksLikeName = (
+                    words.length >= 2 && 
+                    words.length <= 4 &&
+                    line.length > 5 && 
+                    line.length < 50 &&
+                    !line.includes('(') &&
+                    !line.match(/\\d/) &&
+                    !isCallingLine &&
+                    !line.includes('Stake') &&
+                    !line.includes('Ward') &&
+                    words.every(w => w.length > 0 && w[0] === w[0].toUpperCase())
+                );
+                
+                if (looksLikeName && !name) {
+                    name = line;
                 }
             }
             
@@ -510,7 +560,7 @@ class LCRClient:
 
 def cmd_login(args):
     """Test login and save session."""
-    with LCRClient(headless=not args.debug, debug=args.debug) as client:
+    with LCRClient(headless=not args.debug, debug=args.debug, timeout=args.timeout) as client:
         try:
             client.login()
             print(json.dumps({
@@ -526,7 +576,7 @@ def cmd_login(args):
 
 def cmd_members(args):
     """Get member list."""
-    with LCRClient(headless=not args.debug, debug=args.debug) as client:
+    with LCRClient(headless=not args.debug, debug=args.debug, timeout=args.timeout) as client:
         try:
             members = client.get_members()
             print(json.dumps(members, indent=2))
@@ -536,7 +586,7 @@ def cmd_members(args):
 
 def cmd_callings(args):
     """Get callings."""
-    with LCRClient(headless=not args.debug, debug=args.debug) as client:
+    with LCRClient(headless=not args.debug, debug=args.debug, timeout=args.timeout) as client:
         try:
             callings = client.get_callings()
             print(json.dumps(callings, indent=2))
@@ -546,7 +596,7 @@ def cmd_callings(args):
 
 def cmd_ministering(args):
     """Get ministering assignments."""
-    with LCRClient(headless=not args.debug, debug=args.debug) as client:
+    with LCRClient(headless=not args.debug, debug=args.debug, timeout=args.timeout) as client:
         try:
             data = client.get_ministering()
             print(json.dumps(data, indent=2))
@@ -556,7 +606,7 @@ def cmd_ministering(args):
 
 def cmd_action_items(args):
     """Get action items."""
-    with LCRClient(headless=not args.debug, debug=args.debug) as client:
+    with LCRClient(headless=not args.debug, debug=args.debug, timeout=args.timeout) as client:
         try:
             items = client.get_action_items()
             print(json.dumps(items, indent=2))
@@ -566,7 +616,7 @@ def cmd_action_items(args):
 
 def cmd_discover_calling(args):
     """Discover user's calling."""
-    with LCRClient(headless=not args.debug, debug=args.debug) as client:
+    with LCRClient(headless=not args.debug, debug=args.debug, timeout=args.timeout) as client:
         try:
             info = client.discover_calling()
             print(json.dumps(info, indent=2))
@@ -578,6 +628,7 @@ def cmd_discover_calling(args):
 def main():
     parser = argparse.ArgumentParser(description='LCR integration for Sam')
     parser.add_argument('--debug', action='store_true', help='Show browser, verbose output')
+    parser.add_argument('--timeout', type=int, default=45, help='Timeout in seconds for page operations (default: 45)')
     subparsers = parser.add_subparsers(dest='command', required=True)
     
     # login

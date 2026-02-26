@@ -1,12 +1,17 @@
-# Sam Integration Scripts - Dependencies
+# Sam LDS Assistant - Python Dependencies
+# Install: pip install -r requirements.txt
 
-# Gmail (IMAP/SMTP - built into Python, no extra deps needed)
-
-# Google Calendar
-google-auth>=2.0.0
-google-api-python-client>=2.0.0
-
-# LCR Browser Automation
+# Browser automation for LCR
 playwright>=1.40.0
 
-# After installing, run: playwright install chromium
+# Gmail IMAP/SMTP (standard library, but noting version)
+# imaplib, smtplib, email - included in Python 3.8+
+
+# Google APIs for Calendar/Drive
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+
+# Utilities
+python-dateutil>=2.8.2

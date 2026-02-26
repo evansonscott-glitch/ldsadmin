@@ -4,6 +4,9 @@ credentials/
 *.json
 !package.json
 
+# Session storage (auth cookies)
+.sessions/
+
 # User-specific files created during onboarding
 USER.md
 TOOLS.md
